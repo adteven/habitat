@@ -344,19 +344,30 @@ fn read_lock_file_impl<P>(path: P) -> Result<Pid>
 /// Returns `true` if the given PID holds a file lock on `file`.
 fn pid_holds_lock(pid: PositiveNonZeroPid, file: &File) -> Result<bool> {
     let file_inode = file.metadata().map_err(Error::IOError)?.ino();
+    println!("file_inode: {:?}", file_inode);
+
     let pid = pid.into();
+    println!("expected pid: {:?}", pid);
+
 
     // If we find an advisory read lock where the PID is the process
     // that holds the lock on the file, then we're good!
-    Ok(procfs::locks().map_err(Error::Proc)?
-                      .into_iter()
-                      .any(|lock| {
-                          // LockMode and LockKind don't implement PartialEq :(
-                          lock.mode.as_str() == "ADVISORY"
-                          && lock.kind.as_str() == "READ"
-                          && lock.inode == file_inode
-                          && lock.pid == Some(pid)
-                      }))
+    println!("before iterator");
+    let result = procfs::locks().map_err(Error::Proc)?
+                                .into_iter()
+                                .map(|lock| {
+                                    println!("lock: {:?}", lock);
+                                    lock
+                                })
+                                .any(|lock| {
+                                    // LockMode and LockKind don't implement PartialEq :(
+                                    lock.mode.as_str() == "ADVISORY"
+                                    && lock.kind.as_str() == "READ"
+                                    && lock.inode == file_inode
+                                    && lock.pid == Some(pid)
+                                });
+    println!("result: {:?}", result);
+    Ok(result)
 }
 
 #[cfg(windows)]
@@ -532,11 +543,17 @@ mod tests {
         // testing process take a lock on the file.
         let this_pid = std::process::id() as Pid;
         let file = write_to_file(&lock_path, this_pid.to_string());
+
+        // Paranoia is high
+        assert_file_contents(&lock_path, &this_pid.to_string());
+
         file.lock_shared().unwrap();
 
         // We should thus get our PID back because it's in the file, and this
         // process holds the lock.
         let result = read_lock_file_impl(lock_path);
+        // returning InvalidProcess in CI
+        println!("result: {:?}", result);
         assert!(result.is_ok());
         let actual_pid = result.unwrap();
         assert_eq!(this_pid, actual_pid);
